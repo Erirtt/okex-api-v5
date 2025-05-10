@@ -7,6 +7,12 @@ import base64
 import zlib
 import datetime
 import time
+import ssl
+import certifi
+
+
+
+SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 
 def get_timestamp():
@@ -177,7 +183,7 @@ async def subscribe_without_login(url, channels):
     l = []
     while True:
         try:
-            async with websockets.connect(url) as ws:
+            async with websockets.connect(url,ssl=SSL_CTX) as ws:
                 sub_param = {"op": "subscribe", "args": channels}
                 sub_str = json.dumps(sub_param)
                 await ws.send(sub_str)
@@ -228,7 +234,7 @@ async def subscribe_without_login(url, channels):
                                     # 取消订阅
                                     await unsubscribe_without_login(url, channels)
                                     # 发送订阅
-                                    async with websockets.connect(url) as ws:
+                                    async with websockets.connect(url,ssl=SSL_CTX) as ws:
                                         sub_param = {"op": "subscribe", "args": channels}
                                         sub_str = json.dumps(sub_param)
                                         await ws.send(sub_str)
@@ -257,13 +263,15 @@ async def subscribe_without_login(url, channels):
                                             # 取消订阅
                                             await unsubscribe_without_login(url, channels)
                                             # 发送订阅
-                                            async with websockets.connect(url) as ws:
+                                            async with websockets.connect(url,ssl=SSL_CTX) as ws:
                                                 sub_param = {"op": "subscribe", "args": channels}
                                                 sub_str = json.dumps(sub_param)
                                                 await ws.send(sub_str)
                                                 print(f"send: {sub_str}")
         except Exception as e:
             print("连接断开，正在重连……")
+            print("问题：",e)
+
             continue
 
 
@@ -271,9 +279,10 @@ async def subscribe_without_login(url, channels):
 async def subscribe(url, api_key, passphrase, secret_key, channels):
     while True:
         try:
-            async with websockets.connect(url) as ws:
+            async with websockets.connect(url,ssl=SSL_CTX) as ws:
                 # login
                 timestamp = str(get_local_timestamp())
+                print("登录中……")
                 login_str = login_params(timestamp, api_key, passphrase, secret_key)
                 await ws.send(login_str)
                 # print(f"send: {login_str}")
@@ -303,6 +312,8 @@ async def subscribe(url, api_key, passphrase, secret_key, channels):
 
         except Exception as e:
             print("连接断开，正在重连……")
+            print("问题：",e)
+
             continue
 
 
@@ -310,7 +321,7 @@ async def subscribe(url, api_key, passphrase, secret_key, channels):
 async def trade(url, api_key, passphrase, secret_key, trade_param):
     while True:
         try:
-            async with websockets.connect(url) as ws:
+            async with websockets.connect(url,ssl=SSL_CTX) as ws:
                 # login
                 timestamp = str(get_local_timestamp())
                 login_str = login_params(timestamp, api_key, passphrase, secret_key)
@@ -341,12 +352,13 @@ async def trade(url, api_key, passphrase, secret_key, trade_param):
 
         except Exception as e:
             print("连接断开，正在重连……")
+            print("问题：",e)
             continue
 
 
 # unsubscribe channels
 async def unsubscribe(url, api_key, passphrase, secret_key, channels):
-    async with websockets.connect(url) as ws:
+    async with websockets.connect(url,ssl=SSL_CTX) as ws:
         # login
         timestamp = str(get_local_timestamp())
         login_str = login_params(timestamp, api_key, passphrase, secret_key)
@@ -368,7 +380,7 @@ async def unsubscribe(url, api_key, passphrase, secret_key, channels):
 
 # unsubscribe channels
 async def unsubscribe_without_login(url, channels):
-    async with websockets.connect(url) as ws:
+    async with websockets.connect(url,ssl=SSL_CTX) as ws:
         # unsubscribe
         sub_param = {"op": "unsubscribe", "args": channels}
         sub_str = json.dumps(sub_param)
@@ -386,7 +398,7 @@ passphrase = ""
 
 # WebSocket公共频道 public channels
 # 实盘 real trading
-# url = "wss://ws.okx.com:8443/ws/v5/public"
+# url = "wss://ws.okx.com:8443/ws/v5/business"
 # 模拟盘 demo trading
 # url = "wss://ws.okx.com:8443/ws/v5/public?brokerId=9999"
 
@@ -394,7 +406,7 @@ passphrase = ""
 # 实盘 real trading
 # url = "wss://ws.okx.com:8443/ws/v5/private"
 # 模拟盘 demo trading
-# url = "wss://ws.okx.com:8443/ws/v5/private?brokerId=9999"
+url = "wss://wspap.okx.com:8443/ws/v5/private"
 
 '''
 公共频道 public channel
@@ -412,7 +424,7 @@ passphrase = ""
 # 持仓总量频道 
 # channels = [{"channel": "open-interest", "instId": "BTC-USD-210326"}]
 # K线频道
-# channels = [{"channel": "candle1m", "instId": "BTC-USD-210326"}]
+#channels = [{"channel": "mark-price-candle1D","instId": "BTC-USDT"}]
 # 交易频道
 # channels = [{"channel": "trades", "instId": "BTC-USD-201225"}]
 # 预估交割/行权价格频道
@@ -447,9 +459,9 @@ passphrase = ""
 '''
 
 # 账户频道
-# channels = [{"channel": "account", "ccy": "BTC"}]
+# channels = [{"channel": "account", "ccy": "USDT"}]
 # 持仓频道
-# channels = [{"channel": "positions", "instType": "FUTURES", "uly": "BTC-USDT", "instId": "BTC-USDT-210326"}]
+channels = [{"channel": "positions", "instType": "SWAP"}]
 # 订单频道
 # channels = [{"channel": "orders", "instType": "FUTURES", "uly": "BTC-USD", "instId": "BTC-USD-201225"}]
 # 策略委托订单频道
@@ -488,7 +500,7 @@ loop = asyncio.get_event_loop()
 # loop.run_until_complete(subscribe_without_login(url, channels))
 
 # 私有频道 需要登录（账户，持仓，订单等）
-# loop.run_until_complete(subscribe(url, api_key, passphrase, secret_key, channels))
+loop.run_until_complete(subscribe(url, api_key, passphrase, secret_key, channels))
 
 # 交易（下单，撤单，改单等）
 # loop.run_until_complete(trade(url, api_key, passphrase, secret_key, trade_param))

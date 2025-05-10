@@ -37,18 +37,12 @@ class Client(object):
         # send request
         response = None
 
-        # print("url:", url)
-        # print("headers:", header)
-        # print("body:", body)
-
         if method == c.GET:
             response = self.client.get(url, headers=header)
         elif method == c.POST:
             response = self.client.post(url, data=body, headers=header)
 
         # exception handle
-        # print(response.headers)
-
         if not str(response.status_code).startswith('2'):
             raise exceptions.OkexAPIException(response)
 

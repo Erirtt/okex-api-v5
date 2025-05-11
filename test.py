@@ -35,7 +35,7 @@ async def run_subscription():
     collector = DataCollector(strategy=strategy)
 
     url       = "wss://wspap.okx.com:8443/ws/v5/business"
-    args      = [{"channel": "mark-price-candle1m", "instId": "ETH-USDT"}]
+    args      = [{"channel": "mark-price-candle1m", "instId": "BONK-USDT"}]
     run_seconds = 2 * 3600  # 运行 2 小时示例
     start_time  = time.time()
 

@@ -23,7 +23,7 @@ if __name__ == '__main__':
     public_url = "wss://wspap.okx.com:8443/ws/v5/public"
    
     # 取消注释以下行，选择要订阅的公共频道：
-    public_channels = [{"channel": "mark-price","instId": ""}]
+    public_channels = [{"channel": "mark-price","instId": "ETH-USDT"}]
     loop.create_task(subscribe_public(public_url, public_channels, public_handler))
 
     # --------- 私有频道示例（需登录） ---------

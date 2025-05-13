@@ -28,7 +28,7 @@ async def main():
     client = MarketClient(rate_limit_per_sec=10)
 
     # 1. 市值前 30
-    symbols = await client.fetch_top_market_caps(30)
+    symbols = await client.fetch_top_market_caps(50)
     if not symbols:
         print("❌ 无法获取市值前30的币对，退出。")
         sys.exit(1)

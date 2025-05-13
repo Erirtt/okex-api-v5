@@ -127,8 +127,10 @@ async def main():
     ]
 
     # 4) UPSERT + 删除过期
-    await upsert_instruments(pool, records)
+    #await upsert_instruments(pool, records)
     await delete_stale(pool, bj_str)
+    await upsert_instruments(pool, records)
+
     logger.info("✅ 共写入/更新 %d 条 instruments", len(records))
 
     # 5) 关闭连接池

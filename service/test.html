@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>LightweightCharts v4+ 测试</title>
+  <!-- 改成用 jsDelivr -->
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.0.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body {
+      margin: 0;
+      background: #fafafa;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    #chart {
+      width: 800px;
+      height: 450px;
+      border: 1px solid #ddd;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      background: #ffffff;
+    }
+  </style>
+</head>
+<body>
+  <div id="chart"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // 检查 standalone 全局对象
+      if (
+        !window.LightweightCharts ||
+        typeof window.LightweightCharts.createChart !== 'function'
+      ) {
+        console.error('❌ 加载失败，请检查 script 标签是否正确');
+        return;
+      }
+
+      const container = document.getElementById('chart');
+      const chart = window.LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: container.clientHeight,
+        layout: { backgroundColor: '#fff', textColor: '#333' },
+        grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
+        rightPriceScale: { borderColor: '#ccc' },
+        timeScale: { borderColor: '#ccc', timeVisible: true },
+      });
+
+      const candleSeries = chart.addCandlestickSeries({
+        upColor: '#4bffb5', downColor: '#ff4976',
+        borderUpColor: '#4bffb5', borderDownColor: '#ff4976',
+        wickUpColor: '#4bffb5', wickDownColor: '#ff4976',
+      });
+
+      // 示例数据，time 必须是秒级 UNIX 时间戳
+      candleSeries.setData([
+        { time: 1684012800, open: 100, high: 105, low: 95,  close: 102 },
+        { time: 1684099200, open: 102, high: 108, low: 101, close: 106 },
+        { time: 1684185600, open: 106, high: 112, low: 104, close: 110 },
+        { time: 1684272000, open: 110, high: 115, low: 109, close: 113 },
+        { time: 1684358400, open: 113, high: 118, low: 112, close: 117 },
+      ]);
+
+      // 窗口大小变化时自适应
+      window.addEventListener('resize', () => {
+        chart.applyOptions({
+          width: container.clientWidth,
+          height: container.clientHeight,
+        });
+      });
+    });
+  </script>
+</body>
+</html>

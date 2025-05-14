@@ -16,7 +16,7 @@ import asyncpg
 import pandas as pd
 from config import settings
 from market_client import MarketClient
-from service.load_history import load_history_async
+from load_history import load_history_async
 
 def compute_vegas_tunnel(series: pd.Series,
                          span_fast=144, span_slow=169, span_filter=12):

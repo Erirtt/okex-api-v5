@@ -1,128 +1,161 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-service/select_candidates.py
+select_candidates.py
 
-新的筛选逻辑 + 详细调试打印：
-1) 趋势：EMA20 > EMA50
-2) 支撑：当前价 ≤ 20m 低点 × (1 + support_thresh)
-3) 动量：RSI14 > 50 且 MACD_hist > 0
+基于 4H 趋势 + 1H 动量的候选筛选并生成交易计划
 
-每个步骤都会打印中间值和是否通过该步。
+流程：
+1. 取市值前 50 （CoinGecko）
+2. 从 TimescaleDB 读取各标的最新 100 条 4H K 线，计算 EMA20/EMA50 判趋势
+3. 从 TimescaleDB 读取各标的最新 200 条 1H K 线，计算 RSI14 & MACD_hist 判动量
+4. 针对符合条件的标的，给出 entry、stop_loss、take_profit 以及一个“健康度”score
+5. 按 score 从高到低排序，返回前 N 个
+
+函数：
+    async def get_candidates_by_4h1h(n: int = 10) -> List[dict]
 """
 
+import asyncio
 import asyncpg
 import pandas as pd
-
+from datetime import datetime
 from config import settings
 from market_client import MarketClient
-from filter_engine import cond_change_ge, cond_vol_ge, combined_filter
-from load_history import load_history_async
 
-def compute_emas(df, fast=20, slow=50):
-    e1 = df['close'].ewm(span=fast, adjust=False).mean()
-    e2 = df['close'].ewm(span=slow, adjust=False).mean()
-    return e1, e2
+# —— 指标函数 —— 
+def compute_emas(df: pd.DataFrame, fast: int = 20, slow: int = 50):
+    """返回 (EMA_fast, EMA_slow) 两条序列"""
+    e_fast = df['close'].ewm(span=fast, adjust=False).mean()
+    e_slow = df['close'].ewm(span=slow, adjust=False).mean()
+    return e_fast, e_slow
 
-def compute_rsi(s, n=14):
-    d = s.diff()
-    u = d.where(d>0, 0)
-    v = -d.where(d<0, 0)
-    avg_u = u.rolling(n).mean()
-    avg_v = v.rolling(n).mean()
-    rs = avg_u / avg_v
-    return 100 - 100/(1+rs)
+def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    """简单 RSI 计算"""
+    delta = series.diff()
+    up    = delta.where(delta > 0, 0.0)
+    down  = -delta.where(delta < 0, 0.0)
+    ma_up   = up.rolling(period).mean()
+    ma_down = down.rolling(period).mean()
+    rs = ma_up / ma_down
+    return 100 - 100 / (1 + rs)
 
-def compute_macd(s, f=12, l=26, m=9):
-    e_f = s.ewm(span=f, adjust=False).mean()
-    e_l = s.ewm(span=l, adjust=False).mean()
-    macd_line = e_f - e_l
-    sig       = macd_line.ewm(span=m, adjust=False).mean()
-    hist      = macd_line - sig
-    return macd_line, sig, hist
+def compute_macd(series: pd.Series, fast: int = 12, slow: int = 26, sig: int = 9):
+    """返回 (MACD_line, Signal, Histogram)"""
+    e_fast = series.ewm(span=fast, adjust=False).mean()
+    e_slow = series.ewm(span=slow, adjust=False).mean()
+    macd_line = e_fast - e_slow
+    signal    = macd_line.ewm(span=sig, adjust=False).mean()
+    hist      = macd_line - signal
+    return macd_line, signal, hist
 
-async def get_candidates() -> dict:
+# —— 从指定表读取历史 K 线 —— 
+async def load_history(pool: asyncpg.Pool,
+                       symbol: str,
+                       table: str,
+                       limit: int) -> pd.DataFrame | None:
+    """
+    从 table（kline_4h 或 kline_1h）读最近 limit 根 K 线，
+    返回升序 DataFrame，columns = [open,high,low,close,volume]
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(f"""
+            SELECT ts, open, high, low, close, vol AS volume
+              FROM {table}
+             WHERE symbol = $1
+             ORDER BY ts DESC
+             LIMIT $2
+        """, symbol, limit)
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame([dict(r) for r in rows])
+    # ts field 已经是 timestamptz 类型，可直接转换
+    df['ts'] = pd.to_datetime(df['ts'])
+    df.set_index('ts', inplace=True)
+    return df.sort_index()
+
+# —— 主函数 —— 
+async def get_candidates_by_4h1h(n: int = 10) -> list[dict]:
+    """
+    返回 top-n 个候选：
+    [
+      {
+        symbol, score,
+        ema20_4h, ema50_4h,
+        rsi14_1h, macd_hist_1h,
+        entry, stop_loss, take_profit
+      },
+      …
+    ]
+    """
+    # 1) 获取市值前 50
     client = MarketClient(rate_limit_per_sec=10)
     symbols = await client.fetch_top_market_caps(n=50)
 
-    # 初步 24h-change & vol 过滤
-    all_tks = await client.fetch_tickers(instType="SPOT") or []
-    tickers = [t for t in all_tks if t["instId"] in symbols]
-    prelim_rules = [cond_change_ge(3.0), cond_vol_ge(5000)]
-    prelim_tks = combined_filter(tickers, prelim_rules)
-    prelim = [
-        {"symbol": t["instId"],
-         "change24h": round(t["_change24h"],2),
-         "vol24h":    round(t["_vol24h"],2)}
-        for t in prelim_tks
-    ]
-
-    # 建连接池
+    # 2) 建 DB 连接池
     pool = await asyncpg.create_pool(
-        user=settings.PG_USER, password=settings.PG_PASSWORD,
-        database=settings.PG_DB, host=settings.PG_HOST,
-        port=settings.PG_PORT, min_size=1, max_size=3
+        user=settings.PG_USER,
+        password=settings.PG_PASSWORD,
+        database=settings.PG_DB,
+        host=settings.PG_HOST,
+        port=settings.PG_PORT,
+        min_size=1, max_size=5
     )
 
-    final = []
-    print("开始逐 symbol 筛选并打印过程：")
-    for t in prelim_tks:
-        sym = t["instId"]
-        print(f"\n>>> 检查 {sym}")
-        df = await load_history_async(sym, limit=100)
-        if df is None or len(df) < 60:
-            print("  ❌ K 线数据不足，跳过")
+    candidates = []
+    for sym in symbols:
+        # 3) 读 4H 历史
+        df4h = await load_history(pool, sym, 'kline_4h', limit=100)
+        if df4h is None or len(df4h) < 20:
+            continue
+        ema20_4h, ema50_4h = compute_emas(df4h)
+        # 趋势：EMA20 > EMA50
+        if ema20_4h.iat[-1] <= ema50_4h.iat[-1]:
             continue
 
-        close = df['close']
-        ema20, ema50 = compute_emas(df)
-        v20, v50 = ema20.iat[-1], ema50.iat[-1]
-        trend_ok = v20 > v50
-        print(f"  EMA20={v20:.2f}, EMA50={v50:.2f} → 趋势 {'OK' if trend_ok else 'NG'}")
-        if not trend_ok:
+        # 4) 读 1H 历史
+        df1h = await load_history(pool, sym, 'kline_1h', limit=200)
+        if df1h is None or len(df1h) < 20:
+            continue
+        rsi1h = compute_rsi(df1h['close'])
+        macd_hist1h = compute_macd(df1h['close'])[2]
+        # 动量：RSI14 > 50 且 MACD_hist > 0
+        if rsi1h.iat[-1] <= 50 or macd_hist1h.iat[-1] <= 0:
             continue
 
-        low20 = df['low'].rolling(20).min().iat[-1]
-        price = close.iat[-1]
-        support_ok = (price - low20) / low20 <= 0.01
-        print(f"  recent_low={low20:.2f}, close={price:.2f}, "
-              f"distance={(price-low20)/low20:.4f} → 支撑 {'OK' if support_ok else 'NG'}")
-        if not support_ok:
-            continue
+        # 5) 生成交易计划
+        price_now  = df1h['close'].iat[-1]
+        recent_low = df1h['low'].rolling(20).min().iat[-1]
+        stop_loss  = recent_low * 0.995          # 止损：20 根 1H 低点下 0.5%
+        entry      = price_now
+        take_profit= entry + (entry - stop_loss) * 2  # 2:1
 
-        rsi = compute_rsi(close).iat[-1]
-        macd_hist = compute_macd(close)[2].iat[-1]
-        mom_ok = (rsi > 50) and (macd_hist > 0)
-        print(f"  RSI={rsi:.1f} (>50? {'Y' if rsi>50 else 'N'}), "
-              f"MACD_hist={macd_hist:.3f} (>0? {'Y' if macd_hist>0 else 'N'}) "
-              f"→ 动量 {'OK' if mom_ok else 'NG'}")
-        if not mom_ok:
-            continue
+        # 6) 计算健康度 score（EMA 差值百分比）
+        score = (ema20_4h.iat[-1] - ema50_4h.iat[-1]) / ema50_4h.iat[-1]
 
-        reason = (
-            f"趋势↑: EMA20={v20:.2f}>EMA50={v50:.2f}; "
-            f"支撑: close={price:.2f}/low20={low20:.2f}; "
-            f"RSI={rsi:.1f}; MACD_hist={macd_hist:.3f}"
-        )
-        final.append({
-            "symbol":     sym,
-            "ema20":      round(v20,2),
-            "ema50":      round(v50,2),
-            "recent_low": round(low20,2),
-            "close":      round(price,2),
-            "rsi":        round(rsi,1),
-            "macd_hist":  round(macd_hist,3),
-            "reason":     reason
+        candidates.append({
+            "symbol":       sym,
+            "score":        round(score * 100, 2),
+            "ema20_4h":     round(ema20_4h.iat[-1], 2),
+            "ema50_4h":     round(ema50_4h.iat[-1], 2),
+            "rsi14_1h":     round(rsi1h.iat[-1], 1),
+            "macd_hist_1h": round(macd_hist1h.iat[-1], 3),
+            "entry":        round(entry, 4),
+            "stop_loss":    round(stop_loss, 4),
+            "take_profit":  round(take_profit, 4)
         })
-        print(f"  ✅ {sym} 符合条件，加入候选")
 
     await pool.close()
-    print("\n筛选完成，总计入选：", len(final), "个")
-    return {"prelim": prelim, "final": final}
+
+    # 7) 按 score 排序，取前 n
+    candidates.sort(key=lambda x: x['score'], reverse=True)
+    return candidates[:n]
 
 
-# 调试
+# —— 供调试 —— 
 if __name__ == "__main__":
-    import asyncio, json
-    res = asyncio.run(get_candidates())
-    print(json.dumps(res, indent=2, ensure_ascii=False))
+    import json
+    recs = asyncio.run(get_candidates_by_4h1h(n=10))
+    print("🏁 Final Candidates:", json.dumps(recs, ensure_ascii=False, indent=2))

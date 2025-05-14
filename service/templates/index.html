@@ -1,140 +1,70 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8"/>
-  <title>实时入场候选 & 1m K 线</title>
-  <link
-    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
-    rel="stylesheet"
-  />
+  <meta charset="utf-8">
+  <title>候选标的展示</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+        rel="stylesheet">
+  <!-- Plotly.js -->
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-  <style>
-    body { padding: 2rem; }
-    #chart { height: 500px; }
-    .reason-card { margin-bottom: 1rem; }
-  </style>
 </head>
 <body>
-  <div class="container-fluid">
-    <h1 class="mb-4">🚀 实时入场候选 & 1m K 线</h1>
-    <div class="row">
-      <!-- 左侧：初步 & 最终列表 -->
-      <div class="col-md-4">
-        <div class="mb-4">
-          <h5>1️⃣ 初步筛选</h5>
-          <table class="table table-sm table-bordered">
-            <thead class="table-light">
-              <tr><th>Symbol</th><th>Δ24h</th><th>Vol24h</th></tr>
-            </thead>
-            <tbody id="prelim-table"></tbody>
-          </table>
-        </div>
-        <div>
-          <h5>2️⃣ 最终入场候选</h5>
-          <table class="table table-sm table-bordered">
-            <thead class="table-light">
-              <tr><th>Symbol</th><th>操作</th></tr>
-            </thead>
-            <tbody id="final-table"></tbody>
-          </table>
-        </div>
-      </div>
+<div class="container py-4">
+  <h1 class="mb-4">📈 策略候选标的展示</h1>
 
-      <!-- 右侧：理由 + K 线 -->
-      <div class="col-md-8">
-        <div id="reason-container" class="card reason-card d-none">
-          <div class="card-header bg-primary text-white">选中理由</div>
-          <div class="card-body">
-            <p id="reason-text" class="mb-0"></p>
-          </div>
+  <!-- 初步候选 -->
+  <h2>1. 初步筛选（24h 涨跌幅 & 成交量）</h2>
+  <table class="table table-striped">
+    <thead class="table-light">
+      <tr><th>Symbol</th><th>24h 涨跌(%)</th><th>24h 成交量</th></tr>
+    </thead>
+    <tbody>
+    {% for t in prelim %}
+      <tr>
+        <td>{{ t.symbol }}</td>
+        <td>{{ t.change24h }}</td>
+        <td>{{ t.vol24h }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- 最终候选 -->
+  <h2 class="mt-5">2. 最终入场候选</h2>
+  <div class="row row-cols-1 row-cols-md-2 g-4">
+    {% for it in final %}
+    <div class="col">
+      <div class="card h-100 shadow-sm">
+        <div class="card-header bg-primary text-white">
+          <h5 class="card-title mb-0">{{ it.symbol }}</h5>
         </div>
-        <div id="chart" class="border"></div>
+        <div class="card-body">
+          <p class="card-text">{{ it.reason }}</p>
+          <ul class="list-inline">
+            <li class="list-inline-item"><strong>入场：</strong>{{ it.entry }}</li>
+            <li class="list-inline-item"><strong>止损：</strong>{{ it.stop }}</li>
+            <li class="list-inline-item"><strong>止盈：</strong>{{ it.tp }}</li>
+          </ul>
+          <div id="chart-{{ it.symbol|replace('-','') }}"></div>
+        </div>
       </div>
     </div>
+    {% endfor %}
   </div>
+</div>
 
-  <script>
-    async function fetchCandidates(){
-      const res = await fetch('/api/candidates');
-      return await res.json();
-    }
-    async function fetchKline(sym){
-      const res = await fetch(`/api/kline?symbol=${encodeURIComponent(sym)}`);
-      return await res.json();
-    }
-
-    function renderPrelim(list){
-      const tb = document.getElementById('prelim-table');
-      tb.innerHTML = '';
-      if(!list.length){
-        tb.innerHTML = '<tr><td colspan="3" class="text-center text-muted">— 无 —</td></tr>';
-        return;
-      }
-      list.forEach(i=>{
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${i.symbol}</td>
-          <td>${i.change24h.toFixed(2)}%</td>
-          <td>${i.vol24h.toLocaleString()}</td>
-        `;
-        tb.appendChild(tr);
-      });
-    }
-
-    function renderFinal(list){
-      const tb = document.getElementById('final-table');
-      tb.innerHTML = '';
-      if(!list.length){
-        tb.innerHTML = '<tr><td colspan="2" class="text-center text-muted">— 无 —</td></tr>';
-        return;
-      }
-      list.forEach(item=>{
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${item.symbol}</td>
-          <td><button class="btn btn-sm btn-primary">查看</button></td>`;
-        tr.querySelector('button').onclick = () => selectSymbol(item);
-        tb.appendChild(tr);
-      });
-    }
-
-    async function selectSymbol(item){
-      // 显示理由
-      const rc = document.getElementById('reason-container');
-      document.getElementById('reason-text').innerText = item.reason;
-      rc.classList.remove('d-none');
-
-      // 画 K 线
-      const data = await fetchKline(item.symbol);
-      const trace = {
-        x: data.ts,
-        open: data.open, high: data.high,
-        low: data.low, close: data.close,
-        type: 'candlestick',
-        increasing: {line:{color:'green'}},
-        decreasing: {line:{color:'red'}}
-      };
-      const layout = {
-        title: `${item.symbol} 最近60根1m K 线`,
-        xaxis:{rangeslider:{visible:false}},
-        margin:{t:30,l:40,r:20,b:40}
-      };
-      Plotly.newPlot('chart',[trace],layout,{responsive:true});
-    }
-
-    // 刷新所有
-    async function refreshAll(){
-      const {prelim, final} = await fetchCandidates();
-      renderPrelim(prelim);
-      renderFinal(final);
-      // 隐藏上一条理由和图
-      document.getElementById('reason-container').classList.add('d-none');
-      document.getElementById('chart').innerHTML = '';
-    }
-
-    // 初始化 & 定时 30 分钟刷新
-    refreshAll();
-    setInterval(refreshAll, 30*60*1000);
-  </script>
+<script>
+  // 渲染所有 Plotly 图表
+  {% for (sym, fig_json) in charts.items() %}
+    Plotly.newPlot(
+      'chart-{{ sym.replace("-","") }}',
+      JSON.parse(`{{ fig_json|safe }}`).data,
+      JSON.parse(`{{ fig_json|safe }}`).layout,
+      {responsive: true}
+    );
+  {% endfor %}
+</script>
 </body>
 </html>

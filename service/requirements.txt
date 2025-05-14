@@ -1,8 +1,0 @@
-fastapi
-uvicorn[standard]
-asyncpg
-aiohttp
-jinja2
-python-dotenv
-plotly
-pandas

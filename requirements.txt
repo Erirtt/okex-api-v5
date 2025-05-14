@@ -1,2 +1,5 @@
-requests
-httpx[http2]
+flask
+asyncpg
+aiohttp
+plotly
+pandas
